@@ -1,60 +1,51 @@
 import os
-import logging
-from flask import Flask, request
-from telegram import Update, Bot
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import asyncio
+from telegram import Update
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from supabase import create_client, Client
 
-# ----------------------------
-# تنظیم لاگ
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# گرفتن اطلاعات حساس از Environment Variables
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+CHANNEL_ID = int(os.environ.get("CHANNEL_ID"))
 
-# ----------------------------
-# مقداردهی Flask و ربات تلگرام
-app = Flask(__name__)
-TOKEN = os.environ.get("TELEGRAM_TOKEN")  # توکن تلگرام رو از Render environment variables بگیر
-bot = Bot(TOKEN)
+# اتصال به Supabase
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ----------------------------
-# مسیر تست وب‌سرور
-@app.route("/")
-def home():
-    return "Bot is running on Render 🚀"
+async def new_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # بررسی اینکه پیام از چنل ماست
+    if update.effective_chat.id != CHANNEL_ID:
+        return
+    
+    message = update.message
 
-# ----------------------------
-# Webhook برای تلگرام (اختیاری، اگر میخوای از polling استفاده نکنی)
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
-    # می‌تونی دستورات اینجا اضافه کنی
-    return "ok"
+    # متن اصلی پیام
+    text = message.text or ""
+    
+    # اگر پیام شامل فایل است (فیلم، ویدئو، سند)، caption را هم بگیریم
+    caption = message.caption or ""
+    
+    # ترکیب متن و کپشن
+    content = text.strip() + " " + caption.strip()
+    content = content.strip()  # حذف فاصله اضافی
 
-# ----------------------------
-# فرمان /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("سلام! ربات شما آنلاین است 🚀")
+    if not content:
+        return
 
-# ----------------------------
-# اجرای ربات با polling
-def run_bot():
-    app_logger = logging.getLogger("telegram.bot")
-    application = ApplicationBuilder().token(TOKEN).build()
+    # اضافه کردن به Supabase
+    data = {"name": content}
+    supabase.table("movies").insert(data).execute()
+    print(f"Added movie: {content}")
 
-    application.add_handler(CommandHandler("start", start))
+async def main():
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    # همه پیام‌ها رو چک می‌کنیم
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, new_message))
+    
+    print("Bot is running...")
+    await app.run_polling()
 
-    # polling (Render برای webhook هم قابل تنظیم است)
-    application.run_polling()
-
-# ----------------------------
 if __name__ == "__main__":
-    from threading import Thread
-
-    # اجرای ربات در یک ترد جداگانه
-    Thread(target=run_bot).start()
-
-    # اجرای وب‌سرور
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    asyncio.run(main())
