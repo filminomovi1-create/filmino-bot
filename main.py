@@ -1,29 +1,36 @@
-# app.py
+# main.py
 import os
 import logging
 from flask import Flask, request, jsonify
 from telegram import Bot, Update
-from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
+from telegram.ext import Dispatcher, MessageHandler, Filters
 from supabase import create_client
+import requests
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === Env vars (ست‌شون کن توی Render) ===
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-# WEBHOOK_URL را در Render ست کن: https://<your-app>.onrender.com/webhook
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
+# === Env vars (در Render باید ست شوند) ===
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")  # ex: https://your-app.onrender.com/webhook
+SET_WEBHOOK_ON_START = os.environ.get("SET_WEBHOOK_ON_START", "true").lower() in ("1","true","yes")
 
-# === تنظیمات بوت و Supabase ===
+if not TELEGRAM_BOT_TOKEN:
+    logger.error("TELEGRAM_BOT_TOKEN not set in env")
+if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+    logger.error("Supabase vars missing")
+
+# Supabase client (service role — use only on server)
+supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+# Telegram Bot + Dispatcher
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
-supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 app = Flask(__name__)
 
-# === کمک کننده‌ها ===
 def extract_title(caption):
     if not caption:
         return None
@@ -37,16 +44,8 @@ def build_message_link(chat_id, username, message_id):
         cid = cid[4:]
     return f"https://t.me/c/{cid}/{message_id}"
 
-# === هندلرها ===
-def start_handler(update, context):
-    chat = update.effective_chat
-    try:
-        context.bot.send_message(chat_id=chat.id, text="سلام! من ربات فیلم شما هستم ✅")
-    except Exception as e:
-        logger.exception("failed to reply in start_handler: %s", e)
-
 def channel_post_handler(update, context):
-    # توی webhook این آپدیت در update.channel_post قرار می‌گیره
+    # این تابع برای پیام‌های کانال اجرا می‌شود
     msg = update.channel_post
     if msg is None:
         return
@@ -84,7 +83,7 @@ def channel_post_handler(update, context):
         file_id = ph.file_id
         file_unique_id = ph.file_unique_id
     else:
-        # متن خالص یا چیزِ پشتیبانی نشده — فعلاً رد کن
+        # متن یا نوع پشتیبانی نشده — فعلاً رد می‌کنیم
         return
 
     caption = msg.caption or ""
@@ -115,14 +114,13 @@ def channel_post_handler(update, context):
     except Exception as e:
         logger.exception("Failed to upsert to Supabase: %s", e)
 
-# ثبت هندلرها در دیسپچر
+# ثبت Handler در Dispatcher
 dispatcher.add_handler(MessageHandler(Filters.chat_type.channel, channel_post_handler))
-dispatcher.add_handler(MessageHandler(Filters.chat_type.private, start_handler))
 
-# === روت‌ها ===
+# روت‌های وب
 @app.route("/", methods=["GET"])
 def index():
-    return "OK - render bot", 200
+    return "OK - bot webhook app", 200
 
 @app.route("/healthz", methods=["GET"])
 def health():
@@ -131,22 +129,27 @@ def health():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        update_json = request.get_json(force=True)
-        update = Update.de_json(update_json, bot)
+        data = request.get_json(force=True)
+        update = Update.de_json(data, bot)
         dispatcher.process_update(update)
     except Exception as e:
         logger.exception("Error processing update: %s", e)
         return "error", 500
     return "ok", 200
 
-# === ست‌کردن وبهوک خودکار (اگر WEBHOOK_URL ست شده باشد) ===
-if WEBHOOK_URL:
-    try:
-        # حذف وبهوک قبلی (اختیاری) و ست وبهوک جدید
-        bot.delete_webhook()
-        bot.set_webhook(WEBHOOK_URL)
-        logger.info("Webhook set to %s", WEBHOOK_URL)
-    except Exception as e:
-        logger.exception("Failed to set webhook: %s", e)
+# البته می‌تونیم وبهوک را روی استارت ست کنیم
+def set_webhook_if_needed():
+    if WEBHOOK_URL and SET_WEBHOOK_ON_START:
+        try:
+            logger.info("Setting webhook to %s", WEBHOOK_URL)
+            # حذف وبهوک قبلی
+            bot.delete_webhook()
+            res = bot.set_webhook(WEBHOOK_URL)
+            logger.info("setWebhook result: %s", res)
+        except Exception as e:
+            logger.exception("Failed to set webhook: %s", e)
 
-# app متغیر مورد نیاز برای gunicorn: gunicorn app:app -b 0.0.0.0:$PORT
+if __name__ == "__main__":
+    # فقط در حالت محلی برای تست - ولی روی Render gunicorn اجرا می‌کند
+    set_webhook_if_needed()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
