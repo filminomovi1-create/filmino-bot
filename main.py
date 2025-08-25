@@ -1,50 +1,44 @@
 import os
-import asyncio
+import logging
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from supabase import create_client, Client
 
-# دریافت متغیرها از محیط Render
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_KEY"]
-CHANNEL_ID = int(os.environ["CHANNEL_ID"])  # ایدی کانال با منفی
+# Logger
+logging.basicConfig(level=logging.INFO)
 
-# ساخت کلاینت Supabase
+# Supabase info from Render environment variables
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+# Create Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-async def handle_channel_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # بررسی اینکه پیام از کانال مورد نظر آمده باشد
-    if update.effective_chat.id != CHANNEL_ID:
-        return
+# Telegram bot token from Render env
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-    message = update.effective_message
-    title = None
-    summary = None
+# Channel ID to monitor
+CHANNEL_ID = int(os.environ.get("CHANNEL_ID", "-1003056692685"))
 
-    # اگر پیام حاوی ویدیو/فیلم باشد
-    if message.video:
-        title = message.caption or "بدون عنوان"
-        summary = f"Video ID: {message.video.file_id}"
+async def handle_new_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.channel_post or update.message
+    if message and message.chat_id == CHANNEL_ID:
+        title = message.text or ""
+        # Use first 200 chars as summary
+        summary = title[:200] if len(title) > 200 else title
 
-    # اگر پیام حاوی متن بود (مثلاً خلاصه)
-    elif message.text:
-        title = message.text[:100]  # 100 کاراکتر اول به عنوان عنوان
-        summary = message.text
-
-    # اضافه کردن به جدول Supabase
-    if title and summary:
+        # Insert into Supabase
         data = {"title": title, "summary": summary}
-        try:
-            supabase.table("movies").insert(data).execute()
-            print(f"Added to Supabase: {data}")
-        except Exception as e:
-            print(f"Supabase Error: {e}")
+        response = supabase.table("movies").insert(data).execute()
+        logging.info(f"Inserted: {data}, response: {response}")
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_channel_message))
-    print("Bot is running...")
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # Watch channel messages
+    app.add_handler(MessageHandler(filters.ALL & filters.Chat(CHANNEL_ID), handle_new_message))
+
+    logging.info("Bot started...")
     app.run_polling()
 
 if __name__ == "__main__":
