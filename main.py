@@ -4,48 +4,48 @@ from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from supabase import create_client, Client
 
-# گرفتن اطلاعات حساس از Environment Variables
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-CHANNEL_ID = int(os.environ.get("CHANNEL_ID"))
+# دریافت متغیرها از محیط Render
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+CHANNEL_ID = int(os.environ["CHANNEL_ID"])  # ایدی کانال با منفی
 
-# اتصال به Supabase
+# ساخت کلاینت Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-async def new_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # بررسی اینکه پیام از چنل ماست
+async def handle_channel_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # بررسی اینکه پیام از کانال مورد نظر آمده باشد
     if update.effective_chat.id != CHANNEL_ID:
         return
-    
-    message = update.message
 
-    # متن اصلی پیام
-    text = message.text or ""
-    
-    # اگر پیام شامل فایل است (فیلم، ویدئو، سند)، caption را هم بگیریم
-    caption = message.caption or ""
-    
-    # ترکیب متن و کپشن
-    content = text.strip() + " " + caption.strip()
-    content = content.strip()  # حذف فاصله اضافی
+    message = update.effective_message
+    title = None
+    summary = None
 
-    if not content:
-        return
+    # اگر پیام حاوی ویدیو/فیلم باشد
+    if message.video:
+        title = message.caption or "بدون عنوان"
+        summary = f"Video ID: {message.video.file_id}"
 
-    # اضافه کردن به Supabase
-    data = {"name": content}
-    supabase.table("movies").insert(data).execute()
-    print(f"Added movie: {content}")
+    # اگر پیام حاوی متن بود (مثلاً خلاصه)
+    elif message.text:
+        title = message.text[:100]  # 100 کاراکتر اول به عنوان عنوان
+        summary = message.text
 
-async def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    
-    # همه پیام‌ها رو چک می‌کنیم
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, new_message))
-    
+    # اضافه کردن به جدول Supabase
+    if title and summary:
+        data = {"title": title, "summary": summary}
+        try:
+            supabase.table("movies").insert(data).execute()
+            print(f"Added to Supabase: {data}")
+        except Exception as e:
+            print(f"Supabase Error: {e}")
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), handle_channel_message))
     print("Bot is running...")
-    await app.run_polling()
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
