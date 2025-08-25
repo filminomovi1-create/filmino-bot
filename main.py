@@ -2,44 +2,60 @@ import os
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
-from supabase import create_client
+from supabase import create_client, Client
 
-# دریافت متغیرهای محیطی از Render
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-
-# اتصال به Supabase
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
+# -------------------
+# محیط وب و سرور
+# -------------------
 app = Flask(__name__)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id == CHANNEL_ID:
-        # فقط فیلم‌ها را پردازش می‌کنیم
-        if update.message.video:
-            title = update.message.caption or "No Caption"
-            summary = f"Video ID: {update.message.video.file_id}"  # می‌توانی خلاصه دلخواه بسازی
-            # اضافه کردن به Supabase
-            data = {"title": title, "summary": summary}
-            supabase.table("movies").insert(data).execute()
-
 @app.route("/")
-def index():
+def home():
     return "Bot is running!"
 
+# -------------------
+# اطلاعات Supabase از محیط Render
+# -------------------
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# -------------------
+# Telegram Bot
+# -------------------
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = -1003056692685  # ایدی کانال
+
+async def handle_channel_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.channel_post:
+        message = update.channel_post
+        title = message.text or ""
+        summary = message.caption or ""
+
+        # اضافه کردن به Supabase
+        data = {
+            "title": title,
+            "summary": summary
+        }
+        supabase.table("movies").insert(data).execute()
+        print(f"Inserted: {data}")
+
+app_telegram = ApplicationBuilder().token(BOT_TOKEN).build()
+app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.CHANNEL, handle_channel_messages))
+
+# -------------------
+# اجرای Bot و Flask
+# -------------------
 if __name__ == "__main__":
-    # ساخت و اجرای ربات تلگرام
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
-    application.add_handler(MessageHandler(filters.ALL, handle_message))
-    
-    # اجرای همزمان ربات و وب‌سرور
     import asyncio
-    async def main():
-        await application.initialize()
-        await application.start()
-        await application.updater.start_polling()
-        app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
-    
-    asyncio.run(main())
+    import threading
+
+    # اجرای Bot در یک Thread جدا
+    def run_bot():
+        asyncio.run(app_telegram.run_polling())
+
+    threading.Thread(target=run_bot).start()
+
+    # اجرای سرور Flask
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
