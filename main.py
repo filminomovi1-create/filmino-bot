@@ -1,45 +1,45 @@
 import os
-import logging
+from flask import Flask
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
-from supabase import create_client, Client
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from supabase import create_client
 
-# Logger
-logging.basicConfig(level=logging.INFO)
+# دریافت متغیرهای محیطی از Render
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-# Supabase info from Render environment variables
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+# اتصال به Supabase
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Create Supabase client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+app = Flask(__name__)
 
-# Telegram bot token from Render env
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id == CHANNEL_ID:
+        # فقط فیلم‌ها را پردازش می‌کنیم
+        if update.message.video:
+            title = update.message.caption or "No Caption"
+            summary = f"Video ID: {update.message.video.file_id}"  # می‌توانی خلاصه دلخواه بسازی
+            # اضافه کردن به Supabase
+            data = {"title": title, "summary": summary}
+            supabase.table("movies").insert(data).execute()
 
-# Channel ID to monitor
-CHANNEL_ID = int(os.environ.get("CHANNEL_ID", "-1003056692685"))
-
-async def handle_new_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.channel_post or update.message
-    if message and message.chat_id == CHANNEL_ID:
-        title = message.text or ""
-        # Use first 200 chars as summary
-        summary = title[:200] if len(title) > 200 else title
-
-        # Insert into Supabase
-        data = {"title": title, "summary": summary}
-        response = supabase.table("movies").insert(data).execute()
-        logging.info(f"Inserted: {data}, response: {response}")
-
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    # Watch channel messages
-    app.add_handler(MessageHandler(filters.ALL & filters.Chat(CHANNEL_ID), handle_new_message))
-
-    logging.info("Bot started...")
-    app.run_polling()
+@app.route("/")
+def index():
+    return "Bot is running!"
 
 if __name__ == "__main__":
-    main()
+    # ساخت و اجرای ربات تلگرام
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    application.add_handler(MessageHandler(filters.ALL, handle_message))
+    
+    # اجرای همزمان ربات و وب‌سرور
+    import asyncio
+    async def main():
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    
+    asyncio.run(main())
