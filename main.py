@@ -5,7 +5,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 from supabase import create_client, Client
 
 # -------------------
-# محیط وب و سرور
+# Flask App (برای اینکه Render/Railway زنده نگه داره)
 # -------------------
 app = Flask(__name__)
 
@@ -14,44 +14,63 @@ def home():
     return "Bot is running!"
 
 # -------------------
-# اطلاعات Supabase از محیط Render
+# Supabase Config
 # -------------------
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # -------------------
-# Telegram Bot
+# Telegram Bot Config
 # -------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = -1003056692685  # ایدی کانال
 
 async def handle_channel_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.channel_post:
         message = update.channel_post
-        title = message.text or ""
-        summary = message.caption or ""
 
-        # اضافه کردن به Supabase
+        # عنوان و توضیحات (متن / کپشن)
+        title = message.caption or message.text or ""
+        summary = message.text or ""
+
+        # اطلاعات فایل (در صورتی که فایل باشد)
+        file_id = None
+        if message.video:
+            file_id = message.video.file_id
+        elif message.document:
+            file_id = message.document.file_id
+        elif message.photo:
+            file_id = message.photo[-1].file_id  # بزرگترین سایز
+
+        # آماده سازی داده‌ها
         data = {
             "title": title,
-            "summary": summary
+            "summary": summary,
+            "file_id": file_id,
+            "message_id": message.message_id,
+            "chat_id": message.chat.id
         }
+
+        # درج در Supabase
         supabase.table("movies").insert(data).execute()
         print(f"Inserted: {data}")
 
+# -------------------
+# Bot Init
+# -------------------
 app_telegram = ApplicationBuilder().token(BOT_TOKEN).build()
-app_telegram.add_handler(MessageHandler(filters.ALL & filters.ChatType.CHANNEL, handle_channel_messages))
+app_telegram.add_handler(
+    MessageHandler(filters.ALL & filters.ChatType.CHANNEL, handle_channel_messages)
+)
 
 # -------------------
-# اجرای Bot و Flask
+# اجرای همزمان Flask + Bot
 # -------------------
 if __name__ == "__main__":
     import asyncio
     import threading
 
-    # اجرای Bot در یک Thread جدا
+    # اجرای ربات تلگرام در یک Thread جدا
     def run_bot():
         asyncio.run(app_telegram.run_polling())
 
