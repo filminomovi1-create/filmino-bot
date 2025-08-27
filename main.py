@@ -1,80 +1,55 @@
 import os
-from flask import Flask
+from flask import Flask, request
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler
 from supabase import create_client, Client
 
-# -------------------
-# Flask App (برای اینکه Render/Railway زنده نگه داره)
-# -------------------
+# === تنظیمات محیطی ===
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+# === اتصال به سوپابیس ===
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# === اپ Flask ===
 app = Flask(__name__)
+
+# === هندلر /start ===
+async def start(update: Update, context):
+    user = update.effective_user
+    user_id = user.id
+    username = user.username or "بدون نام"
+
+    # ذخیره کاربر در سوپابیس
+    supabase.table("users").insert({
+        "user_id": user_id,
+        "username": username
+    }).execute()
+
+    await update.message.reply_text(f"سلام {username}! 🎉 شما ثبت شدید.")
+
+# === راه‌اندازی بات ===
+application = Application.builder().token(BOT_TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+
+# === وبهوک برای رندر ===
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    application.update_queue.put_nowait(update)
+    return "ok"
 
 @app.route("/")
 def home():
-    return "Bot is running!"
+    return "Bot is running on Render ✅"
 
-# -------------------
-# Supabase Config
-# -------------------
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# -------------------
-# Telegram Bot Config
-# -------------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-
-async def handle_channel_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.channel_post:
-        message = update.channel_post
-
-        # عنوان و توضیحات (متن / کپشن)
-        title = message.caption or message.text or ""
-        summary = message.text or ""
-
-        # اطلاعات فایل (در صورتی که فایل باشد)
-        file_id = None
-        if message.video:
-            file_id = message.video.file_id
-        elif message.document:
-            file_id = message.document.file_id
-        elif message.photo:
-            file_id = message.photo[-1].file_id  # بزرگترین سایز
-
-        # آماده سازی داده‌ها
-        data = {
-            "title": title,
-            "summary": summary,
-            "file_id": file_id,
-            "message_id": message.message_id,
-            "chat_id": message.chat.id
-        }
-
-        # درج در Supabase
-        supabase.table("movies").insert(data).execute()
-        print(f"Inserted: {data}")
-
-# -------------------
-# Bot Init
-# -------------------
-app_telegram = ApplicationBuilder().token(BOT_TOKEN).build()
-app_telegram.add_handler(
-    MessageHandler(filters.ALL & filters.ChatType.CHANNEL, handle_channel_messages)
-)
-
-# -------------------
-# اجرای همزمان Flask + Bot
-# -------------------
+# === اجرای برنامه روی Render ===
 if __name__ == "__main__":
-    import asyncio
-    import threading
-
-    # اجرای ربات تلگرام در یک Thread جدا
-    def run_bot():
-        asyncio.run(app_telegram.run_polling())
-
-    threading.Thread(target=run_bot).start()
-
-    # اجرای سرور Flask
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    port = int(os.environ.get("PORT", 5000))
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        webhook_url=f"{os.getenv('RENDER_EXTERNAL_URL')}/webhook"
+    )
+    app.run(host="0.0.0.0", port=port)
